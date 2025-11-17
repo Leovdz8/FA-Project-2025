@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Convergence Method Animator</title>
+    <!-- Load Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom style for the canvas */
+        canvas {
+            background-image:
+                linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex h-screen overflow-hidden">
+
+    <!-- Control Panel (Left Side) -->
+    <div class="w-full max-w-sm lg:w-1/4 p-6 bg-white shadow-xl rounded-lg m-4 flex flex-col">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">Iteration Visualizer</h1>
+        <p class="text-sm text-gray-600 mb-6">
+            An illustration of the Banach Fixed-Point Theorem. "Contractions" converge to the solution (★), while "Expansions" diverge.
+        </p>
+
+        <!-- Scenario Selector -->
+        <div class="mb-4">
+            <label for="scenario" class="block text-sm font-medium text-gray-700 mb-2">Select Scenario:</label>
+            <select id="scenario" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 focus:ring-2 focus:ring-blue-500">
+                <option value="jacobi-convergent">1. Linear (Jacobi): Convergent</option>
+                <option value="jacobi-divergent">2. Linear (Jacobi): Divergent</option>
+                <option value="gauss-seidel-convergent">3. Non-Linear (Gauss-Seidel): Convergent</option>
+                <option value="gauss-seidel-divergent">4. Non-Linear (Gauss-Seidel): Divergent</option>
+            </select>
+        </div>
+
+        <!-- Controls -->
+        <div class="grid grid-cols-2 gap-4 mb-4">
+            <button id="startBtn" class="w-full py-3 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-200">Start</button>
+            <button id="pauseBtn" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-lg shadow-md hover:bg-yellow-600 transition duration-200" disabled>Pause</button>
+        </div>
+        <button id="resetBtn" class="w-full py-3 px-4 bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 transition duration-200">Reset</button>
+
+        <!-- Info Box -->
+        <!-- MODIFICATION: Added overflow-y-auto to make this panel scrollable if content overflows -->
+        <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200 h-full overflow-y-auto">
+            <h3 class="font-semibold text-gray-700 mb-2" id="system-title">System Definition:</h3>
+            <div id="system-equations" class="font-mono text-sm text-blue-800 mb-4"></div>
+            
+            <!-- NEW: Iteration Info Section -->
+            <h3 class="font-semibold text-gray-700 mb-2" id="iteration-info-title"></h3>
+            <div id="iteration-info-content" class="font-mono text-sm text-gray-600 mb-4 bg-white p-3 rounded-md border border-gray-200"></div>
+            
+            <h3 class="font-semibold text-gray-700">Iteration <span id="iter-count">0</span></h3>
+            <p class="font-mono text-lg text-red-600" id="iter-values">x: 0.00, y: 0.00</p>
+            <p class="font-mono text-sm text-gray-600" id="solution-values">Solution at (x, y)</p>
+            <p id="status" class="text-center font-bold text-lg mt-4"></p>
+        </div>
+    </div>
+
+    <!-- Canvas (Right Side) -->
+    <div class="flex-1 p-4">
+        <canvas id="plotCanvas" class="w-full h-full bg-white rounded-lg shadow-inner border border-gray-200"></canvas>
+    </div>
+
+    <script>
+        // === Global State ===
+        let canvas, ctx;
+        let scale = 50; // Pixels per unit
+        let origin = { x: 0, y: 0 };
+        let points = [];
+        let animationFrameId = null;
+        let isPaused = true;
+        let currentScenario;
+
+        // === Scenario Definitions ===
+        const scenarios = {
+            'jacobi-convergent': {
+                title: 'Linear (Jacobi): Convergent',
+                equations: [
+                    '4x + y = 5',
+                    '-x + 3y = 5'
+                ],
+                // T = -D⁻¹(L+U) = -[1/4 0; 0 1/3] * [0 1; -1 0] = [0 -1/4; 1/3 0]
+                // ρ(T) = sqrt(|(0 - (-1/4)(1/3))|) = sqrt(1/12) ≈ 0.289
+                iterationInfoTitle: 'Iteration Matrix T (Jacobi):',
+                iterationInfo: 'T = -D⁻¹(L+U)<br><span class="text-blue-800">[ 0.00, -0.25 ]<br>[ 0.33,  0.00 ]</span><br>ρ(T) ≈ 0.289 < 1<br><span class="font-bold text-green-600">This is a Contraction.</span>',
+                // x = (5 - y) / 4
+                // y = (5 + x) / 3
+                iterate: (p) => {
+                    const x_new = (5 - p.y) / 4;
+                    const y_new = (5 + p.x) / 3;
+                    return { x: x_new, y: y_new };
+                },
+                solution: { x: 10/13, y: 25/13 },
+                initial: { x: 0, y: 0 },
+                scale: 150,
+                origin: { x: 0.3, y: 0.6 } // Fraction of canvas width/height
+            },
+            'jacobi-divergent': {
+                title: 'Linear (Jacobi): Divergent',
+                equations: [
+                    'x + 2y = 3',
+                    '3x + y = 4'
+                ],
+                // T = -D⁻¹(L+U) = -[1 0; 0 1]⁻¹ * [0 2; 3 0] = [0 -2; -3 0]
+                // ρ(T) = sqrt(|(0 - (-2)(-3))|) = sqrt(6) ≈ 2.449
+                iterationInfoTitle: 'Iteration Matrix T (Jacobi):',
+                iterationInfo: 'T = -D⁻¹(L+U)<br><span class="text-blue-800">[ 0.0, -2.0 ]<br>[ -3.0, 0.0 ]</span><br>ρ(T) ≈ 2.449 > 1<br><span class="font-bold text-red-600">This is an Expansion.</span>',
+                // x = 3 - 2y
+                // y = 4 - 3x
+                iterate: (p) => {
+                    const x_new = 3 - 2 * p.y;
+                    const y_new = 4 - 3 * p.x;
+                    return { x: x_new, y: y_new };
+                },
+                solution: { x: 1, y: 1 },
+                initial: { x: 0, y: 0 },
+                scale: 40,
+                origin: { x: 0.4, y: 0.6 }
+            },
+            'gauss-seidel-convergent': {
+                title: 'Non-Linear (Gauss-Seidel): Convergent',
+                equations: [
+                    'x = 0.5*cos(y) + 0.8',
+                    'y = 0.5*sin(x) + 0.8'
+                ],
+                iterationInfoTitle: 'Contraction Check (Nonlinear):',
+                iterationInfo: 'The mapping G(x,y) is a contraction.<br>The partial derivatives are bounded by 0.5, which is < 1.<br><span class="font-bold text-green-600">This is a Contraction.</span>',
+                // G-S: Use new x to calculate new y
+                iterate: (p) => {
+                    const x_new = 0.5 * Math.cos(p.y) + 0.8;
+                    const y_new = 0.5 * Math.sin(x_new) + 0.8; // Note: uses x_new
+                    return { x: x_new, y: y_new };
+                },
+                solution: { x: 1.167, y: 1.258 }, // Pre-calculated
+                initial: { x: 0, y: 0 },
+                scale: 150,
+                origin: { x: 0.3, y: 0.6 }
+            },
+            'gauss-seidel-divergent': {
+                title: 'Non-Linear (Gauss-Seidel): Divergent',
+                equations: [
+                    'x = 2.0*cos(y) + 0.8',
+                    'y = 2.0*sin(x) + 0.8'
+                ],
+                iterationInfoTitle: 'Contraction Check (Nonlinear):',
+                iterationInfo: 'The mapping G(x,y) is an expansion.<br>The partial derivatives are bounded by 2.0, which is > 1.<br><span class="font-bold text-red-600">This is an Expansion.</span>',
+                // G-S: Use new x to calculate new y
+                iterate: (p) => {
+                    const x_new = 2.0 * Math.cos(p.y) + 0.8;
+                    const y_new = 2.0 * Math.sin(x_new) + 0.8; // Note: uses x_new
+                    return { x: x_new, y: y_new };
+                },
+                solution: { x: -0.43, y: 2.62 }, // Pre-calculated
+                initial: { x: 0, y: 0 },
+                scale: 25,
+                origin: { x: 0.5, y: 0.5 }
+            }
+        };
+
+        // === Canvas Coordinate Helpers ===
+        const mapX = (x) => origin.x + x * scale;
+        const mapY = (y) => origin.y - y * scale;
+
+        // === Drawing Functions ===
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#e5e7eb'; // light gray
+            ctx.lineWidth = 1;
+            ctx.font = "12px sans-serif";
+            ctx.fillStyle = "#9ca3af"; // medium gray
+
+            // Set grid background size
+            const unit = 20; // Base grid size
+            canvas.style.backgroundSize = `${unit}px ${unit}px`;
+            
+            // Draw X and Y axes
+            ctx.strokeStyle = '#9ca3af'; // medium gray
+            ctx.lineWidth = 2;
+            
+            // Y-axis
+            ctx.beginPath();
+            ctx.moveTo(origin.x, 0);
+            ctx.lineTo(origin.x, canvas.height);
+            ctx.stroke();
+
+            // X-axis
+            ctx.beginPath();
+            ctx.moveTo(0, origin.y);
+            ctx.lineTo(canvas.width, origin.y);
+            ctx.stroke();
+
+            // Draw axis labels
+            const xMax = (canvas.width - origin.x) / scale;
+            const xMin = -origin.x / scale;
+            const yMax = origin.y / scale;
+            const yMin = -(canvas.height - origin.y) / scale;
+
+            for (let i = Math.ceil(xMin); i < xMax; i++) {
+                if (i === 0) continue;
+                ctx.fillText(i, mapX(i), origin.y + 15);
+            }
+            for (let i = Math.ceil(yMin); i < yMax; i++) {
+                if (i === 0) continue;
+                ctx.fillText(i, origin.x + 5, mapY(i));
+            }
+            ctx.fillText("0", origin.x + 5, origin.y + 15);
+        }
+
+        function drawSolution(p) {
+            const x = mapX(p.x);
+            const y = mapY(p.y);
+
+            ctx.fillStyle = '#f59e0b'; // amber-500
+            ctx.strokeStyle = '#b45309'; // amber-700
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(x, y - 10);
+            for (let i = 1; i < 5; i++) {
+                ctx.lineTo(
+                    x + Math.sin(i * 0.8 * Math.PI) * 10,
+                    y - Math.cos(i * 0.8 * Math.PI) * 10
+                );
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        function drawPath() {
+            if (points.length < 2) return;
+
+            ctx.strokeStyle = '#ef4444'; // red-500
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(mapX(points[0].x), mapY(points[0].y));
+
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(mapX(points[i].x), mapY(points[i].y));
+            }
+            ctx.stroke();
+
+            // Draw current point
+            const last = points[points.length - 1];
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.arc(mapX(last.x), mapY(last.y), 5, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        // === UI Update Functions ===
+        function updateInfo() {
+            const p = points[points.length - 1];
+            document.getElementById('iter-count').innerText = points.length - 1;
+            document.getElementById('iter-values').innerText = `x: ${p.x.toFixed(4)}, y: ${p.y.toFixed(4)}`;
+        }
+
+        function setupScenario() {
+            isPaused = true;
+            if (animationFrameId) clearTimeout(animationFrameId);
+            
+            const scenarioKey = document.getElementById('scenario').value;
+            currentScenario = scenarios[scenarioKey];
+            
+            // Set canvas properties
+            scale = currentScenario.scale;
+            origin = { 
+                x: canvas.width * currentScenario.origin.x,
+                y: canvas.height * currentScenario.origin.y
+            };
+
+            // Reset state
+            points = [ { ...currentScenario.initial } ];
+            
+            // Update UI
+            document.getElementById('system-title').innerText = currentScenario.title;
+            document.getElementById('system-equations').innerHTML = currentScenario.equations.join('<br>');
+            
+            // MODIFICATION: Set iteration info
+            document.getElementById('iteration-info-title').innerText = currentScenario.iterationInfoTitle;
+            document.getElementById('iteration-info-content').innerHTML = currentScenario.iterationInfo;
+            
+            document.getElementById('solution-values').innerText = `Solution at x: ${currentScenario.solution.x.toFixed(4)}, y: ${currentScenario.solution.y.toFixed(4)}`;
+            document.getElementById('status').innerText = 'Ready to start.';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            document.getElementById('pauseBtn').innerText = 'Pause';
+            
+            // Initial Draw
+            drawGrid();
+            drawSolution(currentScenario.solution);
+            drawPath();
+            updateInfo();
+        }
+
+        // === Animation Loop ===
+        function animate() {
+            if (isPaused) return;
+
+            const currentPoint = points[points.length - 1];
+            const nextPoint = currentScenario.iterate(currentPoint);
+            points.push(nextPoint);
+
+            // Redraw everything
+            drawGrid();
+            drawSolution(currentScenario.solution);
+            drawPath();
+            updateInfo();
+
+            // Check for divergence
+            if (Math.abs(nextPoint.x) > 1000 || Math.abs(nextPoint.y) > 1000 || points.length > 200) {
+                document.getElementById('status').innerText = 'DIVERGED!';
+                document.getElementById('status').className = 'text-center font-bold text-lg mt-4 text-red-600';
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('pauseBtn').disabled = true;
+                return;
+            }
+            
+            // Check for convergence
+            const dist = Math.sqrt(Math.pow(nextPoint.x - currentPoint.x, 2) + Math.pow(nextPoint.y - currentPoint.y, 2));
+            if (dist < 1e-6) {
+                document.getElementById('status').innerText = 'CONVERGED!';
+                document.getElementById('status').className = 'text-center font-bold text-lg mt-4 text-green-600';
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('pauseBtn').disabled = true;
+                return;
+            }
+
+            // Loop
+            animationFrameId = setTimeout(animate, 200); // MODIFICATION: Changed 50ms to 200ms
+        }
+
+        // === Event Listeners ===
+        window.addEventListener('load', () => {
+            canvas = document.getElementById('plotCanvas');
+            ctx = canvas.getContext('2d');
+            
+            // Set canvas size
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            
+            // Controls
+            document.getElementById('scenario').addEventListener('change', setupScenario);
+            document.getElementById('startBtn').addEventListener('click', () => {
+                isPaused = false;
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('pauseBtn').disabled = false;
+                document.getElementById('status').innerText = 'Running...';
+                document.getElementById('status').className = 'text-center font-bold text-lg mt-4 text-blue-600';
+                animate();
+            });
+            document.getElementById('pauseBtn').addEventListener('click', () => {
+                isPaused = !isPaused;
+                if (isPaused) {
+                    document.getElementById('pauseBtn').innerText = 'Resume';
+                    document.getElementById('status').innerText = 'Paused';
+                } else {
+                    document.getElementById('pauseBtn').innerText = 'Pause';
+                    document.getElementById('status').innerText = 'Running...';
+                    animate();
+                }
+            });
+            document.getElementById('resetBtn').addEventListener('click', setupScenario);
+            
+            // Initial setup
+            setupScenario();
+        });
+        
+        window.addEventListener('resize', () => {
+             canvas.width = canvas.offsetWidth;
+             canvas.height = canvas.offsetHeight;
+             setupScenario();
+        });
+
+    </script>
+</body>
+</html>
